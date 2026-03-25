@@ -1,0 +1,1 @@
+cd build && clear && cmake .. && cmake --build . && ./main
