@@ -1,7 +1,10 @@
-// Copyright 2020 Arthur Sonzogni. All rights reserved.
-// Use of this source code is governed by the MIT license that can be found in
-// the LICENSE file.
+#include "ftxui/component/captured_mouse.hpp"
+#include "ftxui/component/component.hpp"
+#include "ftxui/component/component_options.hpp"
+#include "ftxui/component/screen_interactive.hpp"
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <inttypes.h>
 #include <iostream>
@@ -9,12 +12,6 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
-
-#include "ftxui/component/captured_mouse.hpp"
-#include "ftxui/component/component.hpp"
-#include "ftxui/component/component_options.hpp"
-#include "ftxui/component/screen_interactive.hpp"
-#include <cstdlib>
 
 const std::string QUIT = "QUIT";
 const std::string BACK = "BACK";
@@ -68,7 +65,6 @@ void refeshDirectoryVector(fs::path newCurrentPath, std::vector<std::string> &ol
     oldDirectoryVector.clear();
     oldDirectoryVector.push_back(QUIT);
     oldDirectoryVector.push_back(BACK);
-
     for (auto const &dir_entry : std::filesystem::directory_iterator{newCurrentPath}) {
         oldDirectoryVector.push_back(dir_entry.path().string());
     }
@@ -77,104 +73,154 @@ void refeshDirectoryVector(fs::path newCurrentPath, std::vector<std::string> &ol
 int main() {
     auto screen = ScreenInteractive::TerminalOutput();
     fs::path currentPath = fs::current_path();
-    std::cout << currentPath.string() << std::endl;
     std::vector<std::string> currentDirectoryVector = {};
-    std::string fileMetadataString = "";
+    std::vector<std::string> fileSearchResultsVector = {};
+    std::string fileMetadataString = currentPath.string();
     std::string fileAbsolutePath = "";
+    std::string searchQuery = "";
+    bool isFileFocused = false;
 
-    bool rightPanelEnabled = false;
-
-    std::vector<std::string> rightPanelOptions = {"Open in vscode", "TESTING HARHAR", "HEHEXD"};
-    // will always have these values to go back
-    currentDirectoryVector.push_back(QUIT);
-    currentDirectoryVector.push_back(BACK);
-
-    for (auto const &dir_entry : std::filesystem::directory_iterator{currentPath}) {
-        currentDirectoryVector.push_back(dir_entry.path().string());
-    }
+    refeshDirectoryVector(currentPath, currentDirectoryVector);
 
     int selectedIndex = 0;
-    int prevSelectedIndex = 0;
     auto menu = Menu(&currentDirectoryVector, &selectedIndex);
 
-    int rightPanelOptionSelected_1 = 0;
-    int tab_selected = 0;
-    auto rightPanelContainer = Container::Tab(
-        {
-            Radiobox(&rightPanelOptions, &rightPanelOptionSelected_1),
-        },
-        &tab_selected);
+    int selectedFileResultsIndex = 0;
+    auto fileSearchResultsMenu = Menu(&fileSearchResultsVector, &selectedFileResultsIndex);
+    auto fileSearchInput = Input(&searchQuery, "Type filename...");
 
-    auto container = Container::Horizontal({
+    auto btn_open_vs_file = Button(
+        "Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); },
+        ButtonOption::Animated());
+
+    auto btn_open_vs_dir = Button(
+        "Open Dir in VS Code", [&] { system(("code \"" + currentPath.string() + "\"").c_str()); },
+        ButtonOption::Animated());
+
+    auto btn_delete_file = Button(
+        "Delete File",
+        [&] {
+            if (fs::exists(fileAbsolutePath)) {
+                fs::remove((fs::path)fileAbsolutePath);
+                refeshDirectoryVector(currentPath, currentDirectoryVector);
+                isFileFocused = false;
+                menu->TakeFocus();
+            }
+        },
+        ButtonOption::Animated());
+
+    auto btn_create_file = Button(
+        "Create New File",
+        [&] { fileMetadataString = "Creating file in: " + currentPath.string(); },
+        ButtonOption::Animated());
+
+    auto fileActions = Container::Vertical({
+        btn_open_vs_file,
+        btn_delete_file,
+    });
+
+    auto dirActions = Container::Vertical({
+        btn_open_vs_dir,
+        btn_create_file,
+    });
+
+    auto rightPanelContainer = Container::Vertical({
+        fileActions,
+        dirActions,
+    });
+
+    auto browseContent = Container::Horizontal({
         menu,
         rightPanelContainer,
     });
 
-    auto renderer = Renderer(container, [&] {
-        if (rightPanelEnabled) {
-            return vbox({
-                       hbox({menu->Render(), separator(), rightPanelContainer->Render()}),
-                       hbox({text(fileMetadataString)}) | border,
-                   }) |
-                   border;
-        } else {
-            return vbox({
-                       hbox({menu->Render()}),
-                       hbox({text(fileMetadataString)}) | border,
-                   }) |
-                   border;
-        }
+    auto browseRenderer = Renderer(browseContent, [&] {
+        auto title = isFileFocused ? " [FILE ACTIONS] " : " [DIR ACTIONS] ";
+        auto active_content = isFileFocused ? fileActions->Render() : dirActions->Render();
+
+        return hbox({menu->Render() | flex, separator(),
+                     vbox({text(title) | bold | center | color(Color::Yellow), separator(),
+                           active_content}) |
+                         size(WIDTH, EQUAL, 25)});
     });
 
-    renderer |= CatchEvent([&](Event event) -> bool {
-        if (event == Event::Return) {
+    auto searchContent = Container::Vertical({fileSearchInput, fileSearchResultsMenu});
+    auto searchRenderer = Renderer(searchContent, [&] {
+        return vbox({
+            text("Search in: " + currentPath.string()) | dim,
+            fileSearchInput->Render() | border,
+            separator(),
+            fileSearchResultsMenu->Render() | vscroll_indicator | frame | flex,
+        });
+    });
 
-            bool menu_focused = menu->Focused();
-            bool rightpanel_focused = rightPanelContainer->Focused();
+    int main_tab_selected = 0;
+    std::vector<std::string> tab_titles = {"Browse Files", "Search Files"};
+    auto tab_toggle = Toggle(&tab_titles, &main_tab_selected);
+    auto main_tabs = Container::Tab({browseRenderer, searchRenderer}, &main_tab_selected);
 
-            if (menu_focused) {
+    auto main_renderer = Renderer(Container::Vertical({tab_toggle, main_tabs}), [&] {
+        return vbox({tab_toggle->Render() | center, separator(), main_tabs->Render() | flex,
+                     separator(), text(fileMetadataString) | dim}) |
+               border;
+    });
 
-                rightPanelEnabled = false;
-                if (currentDirectoryVector[selectedIndex] == BACK) {
-                    currentPath = currentPath.parent_path();
-                    refeshDirectoryVector(currentPath, currentDirectoryVector);
-                    fileMetadataString = "Visiting directory at: " + currentPath.string();
-
-                } else if (currentDirectoryVector[selectedIndex] == QUIT) {
-                    screen.ExitLoopClosure()();
-                    screen.Exit();
-                } else if (fs::is_directory((fs::path)currentDirectoryVector[selectedIndex])) {
-                    currentPath = (fs::path)currentDirectoryVector[selectedIndex];
-                    refeshDirectoryVector(currentPath, currentDirectoryVector);
-                    fileMetadataString = "Visiting directory at: " + currentPath.string();
-                } else { // regular file
-                    fileAbsolutePath =
-                        fs::absolute((fs::path)currentDirectoryVector[selectedIndex]).string();
-                    FileMetadata fileMetadata = getFileData(fileAbsolutePath);
-                    char str[64];
-                    sprintf(str, "Value is %" PRIuMAX "\n", fileMetadata.file_size);
-                    fileMetadataString =
-                        fileAbsolutePath + " ==> File Size: " + (std::string)str + " || " +
-                        "File Type: " + file_type_to_string(fileMetadata.file_status.type());
-
-                    rightPanelEnabled = true;
-                    // focus on right panel if regular file
-                    rightPanelContainer->TakeFocus();
+    main_renderer |= CatchEvent([&](Event event) -> bool {
+        if (main_tab_selected == 1) {
+            if (event == Event::Return && !fileSearchResultsMenu->Focused()) {
+                fileSearchResultsVector.clear();
+                for (auto const &dir_entry : fs::recursive_directory_iterator(currentPath)) {
+                    if (dir_entry.path().filename().string().find(searchQuery) !=
+                        std::string::npos) {
+                        fileSearchResultsVector.push_back(dir_entry.path().string());
+                    }
                 }
-            } else if (rightpanel_focused) {
-                if (rightPanelOptionSelected_1 == 0) {
-                    std::string command =
-                        std::string("code ") + fs::absolute(fileAbsolutePath).string();
-                    system(command.c_str());
-                }
+                return true;
             }
+            return searchContent->OnEvent(event);
+        }
 
+        if (event == Event::Return && menu->Focused()) {
+            std::string selection = currentDirectoryVector[selectedIndex];
+            if (selection == BACK) {
+                currentPath = currentPath.parent_path();
+                refeshDirectoryVector(currentPath, currentDirectoryVector);
+                isFileFocused = false;
+            } else if (selection == QUIT) {
+                screen.ExitLoopClosure()();
+            } else if (fs::is_directory((fs::path)selection)) {
+                currentPath = (fs::path)selection;
+                refeshDirectoryVector(currentPath, currentDirectoryVector);
+                isFileFocused = false;
+            } else {
+                fileAbsolutePath = fs::absolute((fs::path)selection).string();
+                isFileFocused = true;
+                FileMetadata meta = getFileData(fileAbsolutePath);
+                fileMetadataString = fileAbsolutePath +
+                                     " | Size: " + std::to_string(meta.file_size) +
+                                     " | Type: " + file_type_to_string(meta.file_status.type());
+                fileActions->TakeFocus();
+            }
             return true;
         }
+
+        if (event == Event::Escape) {
+            isFileFocused = false;
+            menu->TakeFocus();
+            return true;
+        }
+
+        if (event == Event::ArrowRight && menu->Focused()) {
+            if (isFileFocused)
+                fileActions->TakeFocus();
+            else
+                dirActions->TakeFocus();
+            return true;
+        }
+
         return false;
     });
 
-    screen.Loop(renderer);
-
+    screen.Loop(main_renderer);
     return 0;
 }
