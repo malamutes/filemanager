@@ -2,7 +2,9 @@
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/component_options.hpp"
 #include "ftxui/component/screen_interactive.hpp"
+#include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -15,8 +17,25 @@
 
 const std::string QUIT = "QUIT";
 const std::string BACK = "BACK";
+const std::string BATTERY_INFO_PATH = "/sys/class/power_supply/BAT0/";
+const std::string CPU_INFO_PATH = "/proc/cpuinfo";
+const std::string ROOT_STORAGE_PATH = "/";
+const uint32_t GIBIBYTES_CONVERSION = 1073741824;
 using namespace ftxui;
 namespace fs = std::filesystem;
+
+struct BatteryInfo {
+    std::string battery;
+    std::string status;
+    std::string model_name;
+};
+
+struct CPUInfo {
+    std::string model_name;
+    std::string cores;
+    std::string threads;
+    std::string current_mhz;
+};
 
 struct FileMetadata {
     std::uintmax_t file_size;
@@ -70,6 +89,128 @@ void refeshDirectoryVector(fs::path newCurrentPath, std::vector<std::string> &ol
     }
 }
 
+void refeshBatteryInfo(BatteryInfo &BatteryInfo) {
+    std::ifstream capFile(BATTERY_INFO_PATH + "capacity");
+    if (capFile)
+        capFile >> BatteryInfo.battery;
+
+    std::ifstream statFile(BATTERY_INFO_PATH + "status");
+    if (statFile)
+        statFile >> BatteryInfo.status;
+
+    std::ifstream modelFile(BATTERY_INFO_PATH + "model_name");
+    if (modelFile)
+        std::getline(modelFile, BatteryInfo.model_name);
+}
+
+void refreshCPUInfo(CPUInfo &cpu) {
+    std::ifstream file(CPU_INFO_PATH);
+    std::string line;
+    int thread_count = 0;
+
+    while (std::getline(file, line)) {
+        if (line.find("processor") == 0) {
+            thread_count++;
+        }
+
+        if (cpu.model_name.empty() && line.find("model name") != std::string::npos) {
+            size_t colon = line.find(':');
+            if (colon != std::string::npos) {
+                cpu.model_name = line.substr(colon + 2);
+            }
+        }
+
+        if (line.find("cpu cores") != std::string::npos) {
+            size_t colon = line.find(':');
+            if (colon != std::string::npos) {
+                cpu.cores = line.substr(colon + 2);
+            }
+        }
+
+        if (line.find("cpu MHz") != std::string::npos) {
+            size_t colon = line.find(':');
+            if (colon != std::string::npos) {
+                cpu.current_mhz = line.substr(colon + 2);
+            }
+        }
+    }
+    cpu.threads = std::to_string(thread_count);
+}
+
+std::uintmax_t disk_usage_percent(const fs::space_info &si, bool is_privileged = false) noexcept {
+    if (constexpr std::uintmax_t X(-1); si.capacity == 0 || si.free == 0 || si.available == 0 ||
+                                        si.capacity == X || si.free == X || si.available == X)
+        return 100;
+
+    std::uintmax_t unused_space = si.free, capacity = si.capacity;
+    if (!is_privileged) {
+        const std::uintmax_t privileged_only_space = si.free - si.available;
+        unused_space -= privileged_only_space;
+        capacity -= privileged_only_space;
+    }
+    const std::uintmax_t used_space{capacity - unused_space};
+    return 100 * used_space / capacity;
+}
+
+void getStorageInformation(fs::space_info &StorageInfo) {
+    fs::space_info si = fs::space(ROOT_STORAGE_PATH);
+    StorageInfo = si;
+}
+
+std::string determineFileIcon(const fs::path &FilePath) {
+    try {
+        fs::file_status s = fs::status(FilePath);
+        auto perms = s.permissions();
+
+        if ((perms & fs::perms::owner_read) == fs::perms::none &&
+            (perms & fs::perms::group_read) == fs::perms::none &&
+            (perms & fs::perms::others_read) == fs::perms::none) {
+            return "\uf023 ";
+        }
+
+        if (fs::is_directory(s)) {
+            return fs::is_empty(FilePath) ? "\uf115 " : "\uf07c ";
+        }
+
+        std::string ext = FilePath.extension().string();
+        for (auto &c : ext)
+            c = std::tolower(c);
+
+        if (ext == ".cpp" || ext == ".hpp")
+            return "\ue61d ";
+        if (ext == ".c" || ext == ".h")
+            return "\ue61e ";
+        if (ext == ".py")
+            return "\ue235 ";
+        if (ext == ".js")
+            return "\ue74e ";
+        if (ext == ".ts")
+            return "\ue628 ";
+        if (ext == ".html")
+            return "\ue736 ";
+        if (ext == ".css")
+            return "\ue749 ";
+        if (ext == ".md")
+            return "\uf48a ";
+        if (ext == ".txt")
+            return "\uf15c ";
+        if (ext == ".pdf")
+            return "\uf1c1 ";
+        if (ext == ".png" || ext == ".jpg")
+            return "\uf1c5 ";
+        if (ext == ".zip" || ext == ".tar")
+            return "\uf410 ";
+        if (ext == ".mp3" || ext == ".wav")
+            return "\uf001 ";
+        if (ext == ".sh")
+            return "\uf489 ";
+        return "\uf15b ";
+
+    } catch (const fs::filesystem_error &e) {
+        return "\uf023 ";
+    }
+}
+
 int main() {
     auto screen = ScreenInteractive::TerminalOutput();
     fs::path currentPath = fs::current_path();
@@ -79,20 +220,46 @@ int main() {
     std::string fileAbsolutePath = "";
     std::string searchQuery = "";
     bool isFileFocused = false;
+    bool showCreateModal = false;
+    std::string newFileName = "";
+    BatteryInfo currentBattery;
+    CPUInfo currentCPU;
+    fs::space_info currentStorage;
 
     refeshDirectoryVector(currentPath, currentDirectoryVector);
 
     int selectedIndex = 0;
-    auto menu = Menu(&currentDirectoryVector, &selectedIndex);
 
     int selectedFileResultsIndex = 0;
+
+    MenuOption option;
+    option.entries_option.transform = [&](const EntryState &state) {
+        std::string label = state.label;
+        Element e = text(label);
+
+        if (label != QUIT && label != BACK) {
+            fs::path full_path = currentPath / label;
+            std::string icon = determineFileIcon(full_path);
+
+            e = hbox({text(icon) | color(Color::Yellow), text(label)});
+        }
+
+        if (state.focused)
+            e |= inverted;
+        if (state.active)
+            e |= bold;
+
+        return e;
+    };
+
+    auto menu = Menu(&currentDirectoryVector, &selectedIndex, option);
+
     auto fileSearchResultsMenu = Menu(&fileSearchResultsVector, &selectedFileResultsIndex);
     auto fileSearchInput = Input(&searchQuery, "Type filename...");
 
     auto btn_open_vs_file = Button(
         "Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); },
         ButtonOption::Animated());
-
     auto btn_open_vs_dir = Button(
         "Open Dir in VS Code", [&] { system(("code \"" + currentPath.string() + "\"").c_str()); },
         ButtonOption::Animated());
@@ -109,35 +276,40 @@ int main() {
         },
         ButtonOption::Animated());
 
-    auto btn_create_file = Button(
-        "Create New File",
-        [&] { fileMetadataString = "Creating file in: " + currentPath.string(); },
+    auto btn_create_file =
+        Button("Create New File", [&] { showCreateModal = true; }, ButtonOption::Animated());
+
+    auto fileActions = Container::Vertical({btn_open_vs_file, btn_delete_file});
+    auto dirActions = Container::Vertical({btn_open_vs_dir, btn_create_file});
+
+    auto fileNameInput = Input(&newFileName, "filename.txt");
+    auto fileNameSubmit = Button(
+        "Create",
+        [&] {
+            if (!newFileName.empty()) {
+                fs::path p = currentPath / newFileName;
+                std::ofstream outfile(p);
+                auto now = std::chrono::system_clock::now();
+                std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+                outfile << newFileName << " has been created at: " << std::ctime(&nowTime)
+                        << std::endl;
+                outfile.close();
+                refeshDirectoryVector(currentPath, currentDirectoryVector);
+                showCreateModal = false;
+                newFileName = "";
+                menu->TakeFocus();
+            }
+        },
         ButtonOption::Animated());
 
-    auto fileActions = Container::Vertical({
-        btn_open_vs_file,
-        btn_delete_file,
-    });
+    auto modal_container = Container::Vertical({fileNameInput, fileNameSubmit});
 
-    auto dirActions = Container::Vertical({
-        btn_open_vs_dir,
-        btn_create_file,
-    });
-
-    auto rightPanelContainer = Container::Vertical({
-        fileActions,
-        dirActions,
-    });
-
-    auto browseContent = Container::Horizontal({
-        menu,
-        rightPanelContainer,
-    });
+    auto browseContent =
+        Container::Horizontal({menu, Container::Vertical({fileActions, dirActions})});
 
     auto browseRenderer = Renderer(browseContent, [&] {
         auto title = isFileFocused ? " [FILE ACTIONS] " : " [DIR ACTIONS] ";
         auto active_content = isFileFocused ? fileActions->Render() : dirActions->Render();
-
         return hbox({menu->Render() | flex, separator(),
                      vbox({text(title) | bold | center | color(Color::Yellow), separator(),
                            active_content}) |
@@ -154,18 +326,118 @@ int main() {
         });
     });
 
-    int main_tab_selected = 0;
-    std::vector<std::string> tab_titles = {"Browse Files", "Search Files"};
-    auto tab_toggle = Toggle(&tab_titles, &main_tab_selected);
-    auto main_tabs = Container::Tab({browseRenderer, searchRenderer}, &main_tab_selected);
+    auto systemInformationContent = Container::Vertical({
+        Renderer([&] {
+            refeshBatteryInfo(currentBattery);
+            refreshCPUInfo(currentCPU);
+            getStorageInformation(currentStorage);
 
-    auto main_renderer = Renderer(Container::Vertical({tab_toggle, main_tabs}), [&] {
-        return vbox({tab_toggle->Render() | center, separator(), main_tabs->Render() | flex,
-                     separator(), text(fileMetadataString) | dim}) |
+            float bat_ratio = std::stof(currentBattery.battery) / 100.0f;
+            float storage_ratio = (float)(currentStorage.capacity - currentStorage.available) /
+                                  (float)currentStorage.capacity;
+
+            return vbox({
+
+                hbox({
+                    vbox({
+                        text("  SYSTEM ") | bold | color(Color::Blue),
+                        hbox({text("  OS Kernel:  "), text("Linux") | color(Color::Green)}),
+                        hbox({text("  CPU Model:  "), text(currentCPU.model_name) | dim}),
+                        hbox({text("  Topology:   "), text(currentCPU.cores + " Cores / " +
+                                                           currentCPU.threads + " Threads")}),
+                        hbox({text("  Clock:      "),
+                              text(currentCPU.current_mhz + " MHz") | color(Color::Yellow)}),
+                    }) | flex,
+                    separator(),
+                    vbox({
+                        text("  SESSION ") | bold | color(Color::Blue),
+                        hbox({text("  Files:      "),
+                              text(std::to_string(currentDirectoryVector.size() - 2))}),
+                        hbox({text("  Path:       "),
+                              text(currentPath.filename().string()) | color(Color::Yellow)}),
+                    }) | size(WIDTH, EQUAL, 30),
+                }),
+
+                separatorDouble(),
+
+                hbox({
+                    vbox({
+                        text(" STORAGE USAGE ") | bold | color(Color::Magenta),
+                        hbox(
+                            {gauge(storage_ratio) | color(Color::Magenta) | border,
+                             vbox({
+                                 text(" " +
+                                      std::to_string(
+                                          (currentStorage.capacity - currentStorage.available) /
+                                          GIBIBYTES_CONVERSION) +
+                                      " / " +
+                                      std::to_string(currentStorage.capacity /
+                                                     GIBIBYTES_CONVERSION) +
+                                      " GB"),
+                                 text(" " + std::to_string((int)(storage_ratio * 100)) + "% Used") |
+                                     dim,
+                             })}),
+                    }) | flex,
+
+                    separator(),
+
+                    vbox({
+                        text(" POWER STATUS ") | bold | color(Color::Cyan),
+                        hbox({gauge(bat_ratio) |
+                                  color(currentBattery.status == "Charging" ? Color::Green
+                                                                            : Color::Cyan) |
+                                  border,
+                              vbox({
+                                  text(" " + currentBattery.battery + "%"),
+                                  text(" " + currentBattery.status) |
+                                      color(currentBattery.status == "Charging" ? Color::Green
+                                                                                : Color::White),
+                              })}),
+                    }) | flex,
+                }),
+
+            });
+        }),
+    });
+
+    auto systemInformationRenderer = Renderer(systemInformationContent, [&] {
+        return vbox({text("SYSTEM INFORMATION") | bold | center, separator(),
+                     systemInformationContent->Render()}) |
                border;
     });
 
+    int main_tab_selected = 0;
+    std::vector<std::string> tab_titles = {"Browse Files", "Search Files", "System Information"};
+    auto tab_toggle = Toggle(&tab_titles, &main_tab_selected);
+    auto main_tabs = Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer},
+                                    &main_tab_selected);
+
+    auto main_renderer = Renderer(Container::Vertical({tab_toggle, main_tabs}), [&] {
+        auto base_ui = vbox({tab_toggle->Render() | center, separator(), main_tabs->Render() | flex,
+                             separator(), text(fileMetadataString) | dim}) |
+                       border;
+
+        if (showCreateModal) {
+            return dbox(
+                {base_ui | dim,
+                 vbox({text("Enter New File Name:") | bold | center,
+                       fileNameInput->Render() | border, fileNameSubmit->Render() | center}) |
+                     border | center | size(WIDTH, GREATER_THAN, 40) | bgcolor(Color::Black)});
+        }
+        return base_ui;
+    });
+
     main_renderer |= CatchEvent([&](Event event) -> bool {
+        if (showCreateModal) {
+            if (event == Event::Escape) {
+                showCreateModal = false;
+                newFileName = "";
+                menu->TakeFocus();
+                return true;
+            }
+            return modal_container->OnEvent(event);
+        }
+
         if (main_tab_selected == 1) {
             if (event == Event::Return && !fileSearchResultsMenu->Focused()) {
                 fileSearchResultsVector.clear();
@@ -175,6 +447,12 @@ int main() {
                         fileSearchResultsVector.push_back(dir_entry.path().string());
                     }
                 }
+                return true;
+            } else if (event == Event::Return && fileSearchResultsMenu->Focused()) {
+                fileAbsolutePath =
+                    fs::absolute((fs::path)fileSearchResultsVector[selectedFileResultsIndex])
+                        .string();
+                system(("code \"" + fileAbsolutePath + "\"").c_str());
                 return true;
             }
             return searchContent->OnEvent(event);
@@ -196,9 +474,8 @@ int main() {
                 fileAbsolutePath = fs::absolute((fs::path)selection).string();
                 isFileFocused = true;
                 FileMetadata meta = getFileData(fileAbsolutePath);
-                fileMetadataString = fileAbsolutePath +
-                                     " | Size: " + std::to_string(meta.file_size) +
-                                     " | Type: " + file_type_to_string(meta.file_status.type());
+                fileMetadataString =
+                    fileAbsolutePath + " | Size: " + std::to_string(meta.file_size);
                 fileActions->TakeFocus();
             }
             return true;
