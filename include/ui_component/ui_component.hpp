@@ -99,4 +99,33 @@ createActionGroup(const std::vector<std::pair<std::string, std::function<void()>
     return Container::Vertical(buttons);
 }
 
+inline Component createUserCard(const std::string &username, std::function<void()> on_swap,
+                                std::function<void()> on_delete) {
+    const bool can_delete_user = (username != "mlamutes");
+    auto swap_to_user_button =
+        createStyledButton("Swap to user", on_swap, Color::GreenLight);
+    auto delete_user_button =
+        createStyledButton("Delete user", on_delete, Color::RedLight);
+    std::vector<Component> user_action_buttons = {swap_to_user_button};
+    if (can_delete_user) {
+        user_action_buttons.push_back(delete_user_button);
+    }
+    auto user_card_actions = Container::Vertical(user_action_buttons);
+
+    return Renderer(user_card_actions,
+                    [username, can_delete_user, swap_to_user_button,
+                     delete_user_button] {
+                        Elements card_elements = {
+                                   hbox({text(" 👤 ") | color(Color::Yellow),
+                                         text(username) | bold}),
+                                   separator(),
+                                   swap_to_user_button->Render(),
+                        };
+                        if (can_delete_user) {
+                            card_elements.push_back(delete_user_button->Render());
+                        }
+                        return vbox(card_elements) | border;
+                    });
+}
+
 } // namespace UIComponents

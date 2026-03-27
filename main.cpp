@@ -27,7 +27,7 @@ namespace fs = std::filesystem;
 std::mutex refreshSystemData_mutex;
 
 int main() {
-    auto screen = ScreenInteractive::TerminalOutput();
+    auto screen = ScreenInteractive::Fullscreen();
     std::vector<ProcessIDMetadata> userProcessIDMetadata;
     std::vector<std::string> process_table_list;
     int process_selected = 0;
@@ -54,8 +54,11 @@ int main() {
     fs::space_info currentStorage;
     std::string searchInFileQuery = "";
     std::vector<std::string> inFileMatchResults = {};
+    std::vector<std::string> userListVector = {};
 
     refeshDirectoryVector(currentPath, currentDirectoryVector);
+    refreshUserList(userListVector);
+    std::sort(userListVector.begin(), userListVector.end());
     int selectedIndex = 0;
     int selectedFileResultsIndex = 0;
     int selectedInFileMatchIndex = 0;
@@ -85,11 +88,9 @@ int main() {
         };
 
         if (label == Filemanager::Constants::QUIT_PROGRAM) {
-            e = hbox({text("⏻ ") | color(Color::RedLight),
-                      text(prettifySpecialLabel(label)) | color(Color::RedLight)});
+            e = hbox({text("⏻ ") | color(Color::RedLight), text(prettifySpecialLabel(label)) | color(Color::RedLight)});
         } else if (label == Filemanager::Constants::PARENT_DIRECTORY) {
-            e = hbox({text("↩ ") | color(Color::Cyan),
-                      text(prettifySpecialLabel(label)) | color(Color::Cyan)});
+            e = hbox({text("↩ ") | color(Color::Cyan), text(prettifySpecialLabel(label)) | color(Color::Cyan)});
         } else {
             std::string icon = determineFileIcon(currentPath / label);
             e = hbox({text(icon) | color(Color::Yellow), text(label)});
@@ -102,21 +103,17 @@ int main() {
     };
 
     auto menu = UIComponents::createMenu(&currentDirectoryVector, &selectedIndex, option);
-    auto fileSearchResultsMenu =
-        UIComponents::createMenu(&fileSearchResultsVector, &selectedFileResultsIndex);
-    auto inFileMatchResultsMenu =
-        UIComponents::createMenu(&inFileMatchResults, &selectedInFileMatchIndex);
+    auto fileSearchResultsMenu = UIComponents::createMenu(&fileSearchResultsVector, &selectedFileResultsIndex);
+    auto inFileMatchResultsMenu = UIComponents::createMenu(&inFileMatchResults, &selectedInFileMatchIndex);
     auto fileSearchInput = Input(&searchQuery, "Type filename...");
     auto searchInFileInput = Input(&searchInFileQuery, "Type text to find...");
     auto process_table_menu = UIComponents::createTable(&process_table_list, &process_selected);
     std::function<void()> runSearchWithinSelectedFile;
 
     auto btn_open_vs_file =
-        UIComponents::createButton("Open File in VS Code",
-                                   [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
+        UIComponents::createButton("Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
     auto btn_search_open_vs_file =
-        UIComponents::createButton("Open File in VS Code",
-                                   [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
+        UIComponents::createButton("Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
     auto btn_search_query_in_file = UIComponents::createButton("Search Within File", [&] {
         showSearchInFileModal = true;
         searchInFileInput->TakeFocus();
@@ -169,14 +166,11 @@ int main() {
 
     auto create_modal_container = Container::Vertical({fileNameInput, fileNameSubmit});
     auto rename_modal_container = Container::Vertical({renameInputComp, renameSubmit});
-    auto searchInFileModalContainer =
-        Container::Vertical({searchInFileInput, searchInFileSubmitButton});
+    auto searchInFileModalContainer = Container::Vertical({searchInFileInput, searchInFileSubmitButton});
     auto browseContent = Container::Horizontal({menu, Container::Vertical({fileActions, dirActions})});
     auto searchFileActions = Container::Vertical({btn_search_open_vs_file, btn_search_query_in_file});
-    auto searchContent =
-        Container::Horizontal({Container::Vertical({fileSearchInput, fileSearchResultsMenu,
-                                                    inFileMatchResultsMenu}),
-                               searchFileActions});
+    auto searchContent = Container::Horizontal(
+        {Container::Vertical({fileSearchInput, fileSearchResultsMenu, inFileMatchResultsMenu}), searchFileActions});
 
     runSearchWithinSelectedFile = [&] {
         inFileMatchResults.clear();
@@ -206,8 +200,7 @@ int main() {
 
         searchQueryInFile(searchInFileQuery, inFileMatchResults, fs::absolute(targetPath));
         showSearchInFileModal = false;
-        fileMetadataString =
-            "Matches in " + fileAbsolutePath + ": " + std::to_string(inFileMatchResults.size());
+        fileMetadataString = "Matches in " + fileAbsolutePath + ": " + std::to_string(inFileMatchResults.size());
         inFileMatchResultsMenu->TakeFocus();
     };
 
@@ -223,17 +216,39 @@ int main() {
         auto searchActionsContent = isSearchFileFocused
                                         ? searchFileActions->Render()
                                         : vbox({text("Select a result") | dim, text("Press Enter/Right") | dim});
-        return hbox({vbox({text("Search in: " + currentPath.string()) | dim,
-                           fileSearchInput->Render() | border, separator(),
-                           text("Filename Matches") | bold, fileSearchResultsMenu->Render() |
-                                                              vscroll_indicator | frame,
-                           separator(), text("In-File Matches") | bold,
-                           inFileMatchResultsMenu->Render() | vscroll_indicator | frame | flex}) |
-                         flex,
-                     separator(),
-                     vbox({text(" [SEARCH ACTIONS] ") | bold | center | color(Color::Yellow),
-                           separator(), searchActionsContent}) |
-                         size(WIDTH, EQUAL, 25)});
+        return hbox(
+            {vbox({text("Search in: " + currentPath.string()) | dim, fileSearchInput->Render() | border, separator(),
+                   text("Filename Matches") | bold, fileSearchResultsMenu->Render() | vscroll_indicator | frame, separator(),
+                   text("In-File Matches") | bold, inFileMatchResultsMenu->Render() | vscroll_indicator | frame | flex}) |
+                 flex,
+             separator(),
+             vbox({text(" [SEARCH ACTIONS] ") | bold | center | color(Color::Yellow), separator(), searchActionsContent}) |
+                 size(WIDTH, EQUAL, 25)});
+    });
+
+    std::vector<Component> userCardComponents;
+    for (const auto &username : userListVector) {
+        userCardComponents.push_back(UIComponents::createUserCard(
+            username,
+            [&, username] { fileMetadataString = "TODO: Swap to user -> " + username; },
+            [&, username] { fileMetadataString = "TODO: Delete user -> " + username; }));
+    }
+    auto userCardsContainer = Container::Vertical(userCardComponents);
+    auto userListRenderer = Renderer(userCardsContainer, [&] {
+        if (userListVector.empty()) {
+            return vbox({text("USER LIST") | bold | center, separator(),
+                         text("No regular users found in /etc/passwd.") | dim | center}) |
+                   border;
+        }
+
+        return vbox({
+                   text("USER LIST") | bold | center,
+                   separator(),
+                   text("Accounts loaded from /etc/passwd") | dim | center,
+                   separator(),
+                   userCardsContainer->Render() | vscroll_indicator | frame | flex,
+               }) |
+               border;
     });
 
     auto systemInformationContent = Container::Vertical(
@@ -331,8 +346,9 @@ int main() {
     });
 
     int main_tab_selected = 0;
-    std::vector<std::string> tab_titles = {"Browse Files", "Search Files", "System Information"};
-    auto main_tabs = Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer}, &main_tab_selected);
+    std::vector<std::string> tab_titles = {"Browse Files", "Search Files", "System Information", "User List"};
+    auto main_tabs =
+        Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer, userListRenderer}, &main_tab_selected);
 
     auto main_renderer = Renderer(main_tabs, [&] {
         Elements tab_elements;
@@ -361,12 +377,10 @@ int main() {
                                             border | center | size(WIDTH, GREATER_THAN, 40) | bgcolor(Color::Black)});
         }
         if (showSearchInFileModal) {
-            return dbox({base_ui | dim,
-                         vbox({text("Search Text Within Selected File:") | bold | center,
-                               searchInFileInput->Render() | border,
-                               searchInFileSubmitButton->Render() | center}) |
-                             border | center | size(WIDTH, GREATER_THAN, 50) |
-                             bgcolor(Color::Black)});
+            return dbox(
+                {base_ui | dim, vbox({text("Search Text Within Selected File:") | bold | center,
+                                      searchInFileInput->Render() | border, searchInFileSubmitButton->Render() | center}) |
+                                    border | center | size(WIDTH, GREATER_THAN, 50) | bgcolor(Color::Black)});
         }
         return base_ui;
     });

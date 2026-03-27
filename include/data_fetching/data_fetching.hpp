@@ -21,5 +21,7 @@ std::uintmax_t disk_usage_percent(const fs::space_info &si, bool is_privileged =
 
 void getStorageInformation(fs::space_info &StorageInfo);
 
-void refreshProcessData(std::vector<ProcessIDMetadata> &userProcessIDMetadata,
-                        ftxui::ScreenInteractive *screen, std::mutex &refreshSystemData_mutex);
+void refreshProcessData(std::vector<ProcessIDMetadata> &userProcessIDMetadata, ftxui::ScreenInteractive *screen,
+                        std::mutex &refreshSystemData_mutex);
+
+void refreshUserList(std::vector<std::string> &userVector);

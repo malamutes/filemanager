@@ -9,8 +9,7 @@ FileMetadata getFileData(fs::path file_path) {
     if (fs::is_directory(file_path) || !fs::exists(file_path)) {
         return {0, fs::file_status(), fs::file_time_type(), false};
     } else {
-        return {fs::file_size(file_path), fs::status(file_path), fs::last_write_time(file_path),
-                true};
+        return {fs::file_size(file_path), fs::status(file_path), fs::last_write_time(file_path), true};
     }
 }
 
@@ -92,8 +91,8 @@ void refreshCPUInfo(CPUInfo &cpu) {
 }
 
 std::uintmax_t disk_usage_percent(const fs::space_info &si, bool is_privileged) noexcept {
-    if (constexpr std::uintmax_t X(-1); si.capacity == 0 || si.free == 0 || si.available == 0 ||
-                                        si.capacity == X || si.free == X || si.available == X)
+    if (constexpr std::uintmax_t X(-1);
+        si.capacity == 0 || si.free == 0 || si.available == 0 || si.capacity == X || si.free == X || si.available == X)
         return 100;
     std::uintmax_t unused_space = si.free, capacity = si.capacity;
     if (!is_privileged) {
@@ -111,13 +110,13 @@ void getStorageInformation(fs::space_info &StorageInfo) {
     }
 }
 
-void refreshProcessData(std::vector<ProcessIDMetadata> &userProcessIDMetadata,
-                        ftxui::ScreenInteractive *screen, std::mutex &refreshSystemData_mutex) {
+void refreshProcessData(std::vector<ProcessIDMetadata> &userProcessIDMetadata, ftxui::ScreenInteractive *screen,
+                        std::mutex &refreshSystemData_mutex) {
     while (true) {
         std::vector<ProcessIDMetadata> temp;
         try {
-            for (auto const &dir_entry : std::filesystem::directory_iterator{
-                     Filemanager::Constants::VIRTUAL_FILE_SYSTEM_PATH}) {
+            for (auto const &dir_entry :
+                 std::filesystem::directory_iterator{Filemanager::Constants::VIRTUAL_FILE_SYSTEM_PATH}) {
                 if (dir_entry.is_directory()) {
                     std::string pid = dir_entry.path().filename().string();
                     if (is_number(pid)) {
@@ -135,5 +134,29 @@ void refreshProcessData(std::vector<ProcessIDMetadata> &userProcessIDMetadata,
         }
         screen->Post(ftxui::Event::Custom);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+}
+
+void refreshUserList(std::vector<std::string> &userVector) {
+    std::ifstream userStream(Filemanager::Constants::USER_LIST_PATH);
+    std::string currLine = "";
+
+    while (std::getline(userStream, currLine)) {
+        size_t varX = currLine.find(":");
+        size_t startIDColon = currLine.find(":", varX + 1);
+        size_t endIDColon = currLine.find(":", startIDColon + 1);
+
+        if (varX != std::string::npos && startIDColon != std::string::npos && endIDColon != std::string::npos) {
+
+            std::string uidStr = currLine.substr(startIDColon + 1, endIDColon - startIDColon - 1);
+
+            int uid = std::stoi(uidStr);
+
+            if (uid >= 1000 && uid < 65534) {
+                std::string username = currLine.substr(0, varX);
+
+                userVector.push_back(username);
+            }
+        }
     }
 }
