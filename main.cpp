@@ -229,8 +229,7 @@ int main() {
     std::vector<Component> userCardComponents;
     for (const auto &username : userListVector) {
         userCardComponents.push_back(UIComponents::createUserCard(
-            username,
-            [&, username] { fileMetadataString = "TODO: Swap to user -> " + username; },
+            username, [&, username] { fileMetadataString = "TODO: Swap to user -> " + username; },
             [&, username] { fileMetadataString = "TODO: Delete user -> " + username; }));
     }
     auto userCardsContainer = Container::Vertical(userCardComponents);
@@ -350,7 +349,7 @@ int main() {
     auto main_tabs =
         Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer, userListRenderer}, &main_tab_selected);
 
-    auto main_renderer = Renderer(main_tabs, [&] {
+    auto app_renderer = Renderer(main_tabs, [&] {
         Elements tab_elements;
         for (size_t i = 0; i < tab_titles.size(); i++) {
             auto e = text(tab_titles[i]);
@@ -363,7 +362,10 @@ int main() {
             }
         }
 
-        auto base_ui = vbox({hbox(tab_elements) | center, separator(), main_tabs->Render() | flex, separator(),
+        auto base_ui = vbox({hbox(tab_elements) | center,
+                             separator(),
+                             main_tabs->Render() | flex,
+                             separator(),
                              text(fileMetadataString) | dim}) |
                        border;
         if (showCreateModal) {
@@ -385,7 +387,7 @@ int main() {
         return base_ui;
     });
 
-    main_renderer |= CatchEvent([&](Event event) -> bool {
+    app_renderer |= CatchEvent([&](Event event) -> bool {
         if (event == Event::Tab) {
             main_tab_selected = (main_tab_selected + 1) % tab_titles.size();
             return true;
@@ -421,6 +423,7 @@ int main() {
             }
             return searchInFileModalContainer->OnEvent(event);
         }
+
         if (main_tab_selected == 1) {
             auto focusSearchSelection = [&]() {
                 if (fileSearchResultsVector.empty()) {
@@ -473,12 +476,14 @@ int main() {
                 currentPath = currentPath.parent_path();
                 refeshDirectoryVector(currentPath, currentDirectoryVector);
                 isFileFocused = false;
+                fileMetadataString = currentPath.string();
             } else if (selection == Filemanager::Constants::QUIT_PROGRAM) {
                 screen.ExitLoopClosure()();
             } else if (fs::is_directory(currentPath / selection)) {
                 currentPath /= selection;
                 refeshDirectoryVector(currentPath, currentDirectoryVector);
                 isFileFocused = false;
+                fileMetadataString = currentPath.string();
             } else {
                 fileAbsolutePath = fs::absolute(currentPath / selection).string();
                 isFileFocused = true;
@@ -503,6 +508,40 @@ int main() {
         return false;
     });
 
-    screen.Loop(main_renderer);
+    int route_selected = 0; // 0 = splash, 1 = main app
+    auto splash_continue_button = UIComponents::createButton("Enter File Manager", [&] {
+        route_selected = 1;
+        menu->TakeFocus();
+    });
+    auto splash_renderer = Renderer(splash_continue_button, [&] {
+        return vbox({
+                   filler(),
+                   vbox({
+                       text("Welcome to File Manager") | bold | center,
+                       text("Press the button below to start") | dim | center,
+                       separator(),
+                       splash_continue_button->Render() | center,
+                   }) | border |
+                       size(WIDTH, GREATER_THAN, 44),
+                   filler(),
+               }) |
+               flex;
+    });
+
+    auto root_renderer = Renderer([&] {
+        if (route_selected == 0) {
+            return splash_renderer->Render();
+        }
+        return app_renderer->Render();
+    });
+
+    root_renderer |= CatchEvent([&](Event event) -> bool {
+        if (route_selected == 0) {
+            return splash_renderer->OnEvent(event);
+        }
+        return app_renderer->OnEvent(event);
+    });
+
+    screen.Loop(root_renderer);
     return 0;
 }

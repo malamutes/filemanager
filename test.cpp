@@ -1,13 +1,5 @@
-#include "constants/constants.hpp"
-#include "ftxui/component/captured_mouse.hpp"
-#include "ftxui/component/component.hpp"
-#include "ftxui/component/component_options.hpp"
-#include "ftxui/component/screen_interactive.hpp"
-#include "include/data_fetching/data_fetching.hpp"
-#include "include/ui_component/ui_component.hpp"
-#include "include/utils/utils.hpp"
-#include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -22,21 +14,40 @@
 #include <thread>
 #include <vector>
 
+std::string COMMAND_TO_RUN = "git status";
+
 int main() {
 
     std::ifstream userStream("/etc/passwd");
-    std::string currLine = "";
+    int status;
+    char buffer[1024];
+    std::string result;
 
-    while (std::getline(userStream, currLine)) {
-        int varX = currLine.find(":");
-        int startIDColon = currLine.find(":", varX + 1);
-        int endIDColon = currLine.find(":", startIDColon + 1);
-        int uid = std::stoi(currLine.substr(startIDColon + 1, endIDColon - startIDColon));
+    FILE *returnOutputPipe = popen(COMMAND_TO_RUN.c_str(), "r");
 
-        if (uid >= 1000 && uid < 65534) {
-            std::cout << "UID: " << uid << "-->" << currLine.substr(0, varX) << std::endl;
-        }
-    };
+    if (!returnOutputPipe) {
+        // do something
+    }
+
+    while (fgets(buffer, sizeof(buffer), returnOutputPipe) != nullptr) {
+        result += buffer;
+    }
+
+    status = pclose(returnOutputPipe);
+    if (status == -1) {
+        /* Error reported by pclose() */
+
+    } else {
+        /* Use macros described under wait() to inspect `status' in order
+           to determine success/failure of command executed by popen() */
+    }
+
+    std::stringstream returnOutput(result);
+    std::string currLine;
+
+    while (std::getline(returnOutput, currLine)) {
+        std::cout << "Line: " << currLine << std::endl;
+    }
 
     return 0;
 }
