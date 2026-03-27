@@ -3,8 +3,8 @@
 #include <string>
 
 namespace Filemanager::Constants {
-const std::string QUIT = "QUIT";
-const std::string BACK = "BACK";
+const std::string QUIT_PROGRAM = "QUIT_PROGRAM";
+const std::string PARENT_DIRECTORY = "PARENT_DIRECTORY";
 const std::string BATTERY_INFO_PATH = "/sys/class/power_supply/BAT0/";
 const std::string CPU_INFO_PATH = "/proc/cpuinfo";
 const std::string VIRTUAL_FILE_SYSTEM_PATH = "/proc/";

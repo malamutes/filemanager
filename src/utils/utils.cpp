@@ -66,7 +66,7 @@ void searchQueryInFile(const std::string &queryToSearch, std::vector<std::string
     if (readFile.is_open()) {
         while (std::getline(readFile, currLine)) {
             if (currLine.find(queryToSearch) != std::string::npos) {
-                queryResults.push_back(currLine);
+                queryResults.push_back("Line number " + std::to_string(currLineNum) + " \u2192 " + currLine);
             }
             currLineNum++;
         }

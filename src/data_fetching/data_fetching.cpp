@@ -43,8 +43,8 @@ std::string file_type_to_string(fs::file_type ft) {
 
 void refeshDirectoryVector(fs::path newCurrentPath, std::vector<std::string> &oldDirectoryVector) {
     oldDirectoryVector.clear();
-    oldDirectoryVector.push_back(Filemanager::Constants::QUIT);
-    oldDirectoryVector.push_back(Filemanager::Constants::BACK);
+    oldDirectoryVector.push_back(Filemanager::Constants::QUIT_PROGRAM);
+    oldDirectoryVector.push_back(Filemanager::Constants::PARENT_DIRECTORY);
     try {
         for (auto const &dir_entry : std::filesystem::directory_iterator{newCurrentPath}) {
             oldDirectoryVector.push_back(dir_entry.path().filename().string());

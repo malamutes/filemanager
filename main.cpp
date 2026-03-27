@@ -46,23 +46,51 @@ int main() {
     bool isSearchFileFocused = false;
     bool showCreateModal = false;
     bool showRenameModal = false;
+    bool showSearchInFileModal = false;
     std::string newFileName = "";
     std::string renameInputStr = "";
     BatteryInfo currentBattery;
     CPUInfo currentCPU;
     fs::space_info currentStorage;
-    std::string searchInFile = "";
-    std::string searchInFileResults = "";
+    std::string searchInFileQuery = "";
+    std::vector<std::string> inFileMatchResults = {};
 
     refeshDirectoryVector(currentPath, currentDirectoryVector);
     int selectedIndex = 0;
     int selectedFileResultsIndex = 0;
+    int selectedInFileMatchIndex = 0;
 
     MenuOption option;
     option.entries_option.transform = [&](const EntryState &state) {
         std::string label = state.label;
         Element e = text(label);
-        if (label != Filemanager::Constants::QUIT && label != Filemanager::Constants::BACK) {
+
+        auto prettifySpecialLabel = [](const std::string &raw) {
+            std::string pretty = raw;
+            std::replace(pretty.begin(), pretty.end(), '_', ' ');
+            bool capitalize_next = true;
+            for (char &c : pretty) {
+                if (c == ' ') {
+                    capitalize_next = true;
+                    continue;
+                }
+                if (capitalize_next) {
+                    c = std::toupper(static_cast<unsigned char>(c));
+                    capitalize_next = false;
+                } else {
+                    c = std::tolower(static_cast<unsigned char>(c));
+                }
+            }
+            return pretty;
+        };
+
+        if (label == Filemanager::Constants::QUIT_PROGRAM) {
+            e = hbox({text("⏻ ") | color(Color::RedLight),
+                      text(prettifySpecialLabel(label)) | color(Color::RedLight)});
+        } else if (label == Filemanager::Constants::PARENT_DIRECTORY) {
+            e = hbox({text("↩ ") | color(Color::Cyan),
+                      text(prettifySpecialLabel(label)) | color(Color::Cyan)});
+        } else {
             std::string icon = determineFileIcon(currentPath / label);
             e = hbox({text(icon) | color(Color::Yellow), text(label)});
         }
@@ -76,20 +104,25 @@ int main() {
     auto menu = UIComponents::createMenu(&currentDirectoryVector, &selectedIndex, option);
     auto fileSearchResultsMenu =
         UIComponents::createMenu(&fileSearchResultsVector, &selectedFileResultsIndex);
+    auto inFileMatchResultsMenu =
+        UIComponents::createMenu(&inFileMatchResults, &selectedInFileMatchIndex);
     auto fileSearchInput = Input(&searchQuery, "Type filename...");
+    auto searchInFileInput = Input(&searchInFileQuery, "Type text to find...");
     auto process_table_menu = UIComponents::createTable(&process_table_list, &process_selected);
+    std::function<void()> runSearchWithinSelectedFile;
 
-    auto btn_open_vs_file = UIComponents::createButton(
-        "Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
-    auto btn_search_open_vs_file = UIComponents::createButton(
-        "Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
+    auto btn_open_vs_file =
+        UIComponents::createButton("Open File in VS Code",
+                                   [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
+    auto btn_search_open_vs_file =
+        UIComponents::createButton("Open File in VS Code",
+                                   [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
     auto btn_search_query_in_file = UIComponents::createButton("Search Within File", [&] {
-        system(("cat \"" + fs::path(fileAbsolutePath).filename().string() + "\"" + " | grep " +
-                "\"" + searchInFile + "\"")
-                   .c_str());
+        showSearchInFileModal = true;
+        searchInFileInput->TakeFocus();
     });
-    auto btn_open_vs_dir = UIComponents::createButton(
-        "Open Dir in VS Code", [&] { system(("code \"" + currentPath.string() + "\"").c_str()); });
+    auto btn_open_vs_dir = UIComponents::createButton("Open Dir in VS Code",
+                                                      [&] { system(("code \"" + currentPath.string() + "\"").c_str()); });
     auto btn_delete_file = UIComponents::createButton("Delete File", [&] {
         if (fs::exists(fileAbsolutePath)) {
             fs::remove(fileAbsolutePath);
@@ -98,8 +131,7 @@ int main() {
             menu->TakeFocus();
         }
     });
-    auto btn_create_file =
-        UIComponents::createButton("Create New File", [&] { showCreateModal = true; });
+    auto btn_create_file = UIComponents::createButton("Create New File", [&] { showCreateModal = true; });
     auto btn_rename_file = UIComponents::createButton("Rename File", [&] {
         renameInputStr = fs::path(fileAbsolutePath).filename().string();
         showRenameModal = true;
@@ -129,32 +161,74 @@ int main() {
             menu->TakeFocus();
         }
     });
+    auto searchInFileSubmitButton = UIComponents::createButton("Search", [&] {
+        if (runSearchWithinSelectedFile) {
+            runSearchWithinSelectedFile();
+        }
+    });
 
     auto create_modal_container = Container::Vertical({fileNameInput, fileNameSubmit});
     auto rename_modal_container = Container::Vertical({renameInputComp, renameSubmit});
-    auto browseContent =
-        Container::Horizontal({menu, Container::Vertical({fileActions, dirActions})});
-    auto searchFileActions = Container::Vertical({btn_search_open_vs_file});
-    auto searchContent = Container::Horizontal(
-        {Container::Vertical({fileSearchInput, fileSearchResultsMenu}), searchFileActions});
+    auto searchInFileModalContainer =
+        Container::Vertical({searchInFileInput, searchInFileSubmitButton});
+    auto browseContent = Container::Horizontal({menu, Container::Vertical({fileActions, dirActions})});
+    auto searchFileActions = Container::Vertical({btn_search_open_vs_file, btn_search_query_in_file});
+    auto searchContent =
+        Container::Horizontal({Container::Vertical({fileSearchInput, fileSearchResultsMenu,
+                                                    inFileMatchResultsMenu}),
+                               searchFileActions});
+
+    runSearchWithinSelectedFile = [&] {
+        inFileMatchResults.clear();
+        selectedInFileMatchIndex = 0;
+
+        if (fileAbsolutePath.empty()) {
+            fileMetadataString = "Select a file in Search Files before searching within it.";
+            showSearchInFileModal = false;
+            searchFileActions->TakeFocus();
+            return;
+        }
+
+        fs::path targetPath = fs::path(fileAbsolutePath);
+        if (!fs::exists(targetPath) || fs::is_directory(targetPath)) {
+            fileMetadataString = "Selected path is not a searchable file: " + fileAbsolutePath;
+            showSearchInFileModal = false;
+            searchFileActions->TakeFocus();
+            return;
+        }
+
+        if (searchInFileQuery.empty()) {
+            fileMetadataString = "Enter text to search within file: " + fileAbsolutePath;
+            showSearchInFileModal = false;
+            inFileMatchResultsMenu->TakeFocus();
+            return;
+        }
+
+        searchQueryInFile(searchInFileQuery, inFileMatchResults, fs::absolute(targetPath));
+        showSearchInFileModal = false;
+        fileMetadataString =
+            "Matches in " + fileAbsolutePath + ": " + std::to_string(inFileMatchResults.size());
+        inFileMatchResultsMenu->TakeFocus();
+    };
 
     auto browseRenderer = Renderer(browseContent, [&] {
         auto title = isFileFocused ? " [FILE ACTIONS] " : " [DIR ACTIONS] ";
         auto active_content = isFileFocused ? fileActions->Render() : dirActions->Render();
         return hbox({menu->Render() | flex, separator(),
-                     vbox({text(title) | bold | center | color(Color::Yellow), separator(),
-                           active_content}) |
+                     vbox({text(title) | bold | center | color(Color::Yellow), separator(), active_content}) |
                          size(WIDTH, EQUAL, 25)});
     });
 
     auto searchRenderer = Renderer(searchContent, [&] {
-        auto searchActionsContent =
-            isSearchFileFocused
-                ? searchFileActions->Render()
-                : vbox({text("Select a result") | dim, text("Press Enter/Right") | dim});
+        auto searchActionsContent = isSearchFileFocused
+                                        ? searchFileActions->Render()
+                                        : vbox({text("Select a result") | dim, text("Press Enter/Right") | dim});
         return hbox({vbox({text("Search in: " + currentPath.string()) | dim,
                            fileSearchInput->Render() | border, separator(),
-                           fileSearchResultsMenu->Render() | vscroll_indicator | frame | flex}) |
+                           text("Filename Matches") | bold, fileSearchResultsMenu->Render() |
+                                                              vscroll_indicator | frame,
+                           separator(), text("In-File Matches") | bold,
+                           inFileMatchResultsMenu->Render() | vscroll_indicator | frame | flex}) |
                          flex,
                      separator(),
                      vbox({text(" [SEARCH ACTIONS] ") | bold | center | color(Color::Yellow),
@@ -204,29 +278,24 @@ int main() {
                      process_table_list.push_back(row);
                  }
              }
-             float bat_ratio =
-                 std::stof(currentBattery.battery.empty() ? "0" : currentBattery.battery) / 100.0f;
+             float bat_ratio = std::stof(currentBattery.battery.empty() ? "0" : currentBattery.battery) / 100.0f;
              float storage_ratio =
                  (currentStorage.capacity == 0)
                      ? 0.0f
-                     : (float)(currentStorage.capacity - currentStorage.available) /
-                           (float)currentStorage.capacity;
+                     : (float)(currentStorage.capacity - currentStorage.available) / (float)currentStorage.capacity;
              return vbox({
                  hbox({
                      vbox({
                          text("  SYSTEM ") | bold | color(Color::Blue),
                          UIComponents::createStatBox("  CPU Model:  ", currentCPU.model_name),
                          UIComponents::createStatBox("  Topology:   ",
-                                                     currentCPU.cores + " Cores / " +
-                                                         currentCPU.threads + " Threads"),
-                         UIComponents::createStatBox(
-                             "  Clock:      ", currentCPU.current_mhz + " MHz", Color::Yellow),
+                                                     currentCPU.cores + " Cores / " + currentCPU.threads + " Threads"),
+                         UIComponents::createStatBox("  Clock:      ", currentCPU.current_mhz + " MHz", Color::Yellow),
                      }) | flex,
                      separator(),
                      vbox({
                          text("  SESSION ") | bold | color(Color::Blue),
-                         UIComponents::createStatBox(
-                             "  Path:       ", currentPath.filename().string(), Color::Yellow),
+                         UIComponents::createStatBox("  Path:       ", currentPath.filename().string(), Color::Yellow),
                      }) | size(WIDTH, EQUAL, 30),
                  }),
 
@@ -238,20 +307,17 @@ int main() {
                          UIComponents::createGaugeBox(
                              storage_ratio,
                              " " +
-                                 std::to_string(
-                                     (currentStorage.capacity - currentStorage.available) /
-                                     Filemanager::Constants::GIBIBYTES_CONVERSION) +
+                                 std::to_string((currentStorage.capacity - currentStorage.available) /
+                                                Filemanager::Constants::GIBIBYTES_CONVERSION) +
                                  " GB",
-                             " " + std::to_string((int)(storage_ratio * 100)) + "% Used",
-                             Color::Magenta),
+                             " " + std::to_string((int)(storage_ratio * 100)) + "% Used", Color::Magenta),
                      }) | flex,
                      separator(),
                      vbox({
                          text(" POWER STATUS ") | bold | color(Color::Cyan),
-                         UIComponents::createGaugeBox(
-                             bat_ratio, " " + currentBattery.battery + "%",
-                             " " + currentBattery.status,
-                             currentBattery.status == "Charging" ? Color::Green : Color::Cyan),
+                         UIComponents::createGaugeBox(bat_ratio, " " + currentBattery.battery + "%",
+                                                      " " + currentBattery.status,
+                                                      currentBattery.status == "Charging" ? Color::Green : Color::Cyan),
                      }) | flex,
                  }),
 
@@ -261,15 +327,12 @@ int main() {
          process_table_menu});
 
     auto systemInformationRenderer = Renderer(systemInformationContent, [&] {
-        return vbox({text("SYSTEM INFORMATION") | bold | center, separator(),
-                     systemInformationContent->Render()}) |
-               border;
+        return vbox({text("SYSTEM INFORMATION") | bold | center, separator(), systemInformationContent->Render()}) | border;
     });
 
     int main_tab_selected = 0;
     std::vector<std::string> tab_titles = {"Browse Files", "Search Files", "System Information"};
-    auto main_tabs = Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer},
-                                    &main_tab_selected);
+    auto main_tabs = Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer}, &main_tab_selected);
 
     auto main_renderer = Renderer(main_tabs, [&] {
         Elements tab_elements;
@@ -284,22 +347,26 @@ int main() {
             }
         }
 
-        auto base_ui = vbox({hbox(tab_elements) | center, separator(), main_tabs->Render() | flex,
-                             separator(), text(fileMetadataString) | dim}) |
+        auto base_ui = vbox({hbox(tab_elements) | center, separator(), main_tabs->Render() | flex, separator(),
+                             text(fileMetadataString) | dim}) |
                        border;
         if (showCreateModal) {
-            return dbox(
-                {base_ui | dim,
-                 vbox({text("Enter New File Name:") | bold | center,
-                       fileNameInput->Render() | border, fileNameSubmit->Render() | center}) |
-                     border | center | size(WIDTH, GREATER_THAN, 40) | bgcolor(Color::Black)});
+            return dbox({base_ui | dim, vbox({text("Enter New File Name:") | bold | center, fileNameInput->Render() | border,
+                                              fileNameSubmit->Render() | center}) |
+                                            border | center | size(WIDTH, GREATER_THAN, 40) | bgcolor(Color::Black)});
         }
         if (showRenameModal) {
-            return dbox(
-                {base_ui | dim,
-                 vbox({text("Rename File To:") | bold | center, renameInputComp->Render() | border,
-                       renameSubmit->Render() | center}) |
-                     border | center | size(WIDTH, GREATER_THAN, 40) | bgcolor(Color::Black)});
+            return dbox({base_ui | dim, vbox({text("Rename File To:") | bold | center, renameInputComp->Render() | border,
+                                              renameSubmit->Render() | center}) |
+                                            border | center | size(WIDTH, GREATER_THAN, 40) | bgcolor(Color::Black)});
+        }
+        if (showSearchInFileModal) {
+            return dbox({base_ui | dim,
+                         vbox({text("Search Text Within Selected File:") | bold | center,
+                               searchInFileInput->Render() | border,
+                               searchInFileSubmitButton->Render() | center}) |
+                             border | center | size(WIDTH, GREATER_THAN, 50) |
+                             bgcolor(Color::Black)});
         }
         return base_ui;
     });
@@ -326,18 +393,29 @@ int main() {
             }
             return rename_modal_container->OnEvent(event);
         }
+        if (showSearchInFileModal) {
+            if (event == Event::Escape) {
+                showSearchInFileModal = false;
+                searchFileActions->TakeFocus();
+                return true;
+            }
+            if (event == Event::Return) {
+                if (runSearchWithinSelectedFile) {
+                    runSearchWithinSelectedFile();
+                }
+                return true;
+            }
+            return searchInFileModalContainer->OnEvent(event);
+        }
         if (main_tab_selected == 1) {
             auto focusSearchSelection = [&]() {
                 if (fileSearchResultsVector.empty()) {
                     return true;
                 }
-                fileAbsolutePath =
-                    fs::absolute((fs::path)fileSearchResultsVector[selectedFileResultsIndex])
-                        .string();
+                fileAbsolutePath = fs::absolute((fs::path)fileSearchResultsVector[selectedFileResultsIndex]).string();
                 isSearchFileFocused = true;
                 FileMetadata meta = getFileData(fileAbsolutePath);
-                fileMetadataString =
-                    fileAbsolutePath + " | Size: " + std::to_string(meta.file_size);
+                fileMetadataString = fileAbsolutePath + " | Size: " + std::to_string(meta.file_size);
                 searchFileActions->TakeFocus();
                 return true;
             };
@@ -345,11 +423,12 @@ int main() {
             if (event == Event::Return && fileSearchInput->Focused()) {
                 fileSearchResultsVector.clear();
                 selectedFileResultsIndex = 0;
+                inFileMatchResults.clear();
+                selectedInFileMatchIndex = 0;
                 isSearchFileFocused = false;
                 try {
                     for (auto const &dir_entry : fs::recursive_directory_iterator(currentPath)) {
-                        if (dir_entry.path().filename().string().find(searchQuery) !=
-                            std::string::npos)
+                        if (dir_entry.path().filename().string().find(searchQuery) != std::string::npos)
                             fileSearchResultsVector.push_back(dir_entry.path().string());
                     }
                 } catch (...) {
@@ -376,11 +455,11 @@ int main() {
         }
         if (main_tab_selected == 0 && event == Event::Return && menu->Focused()) {
             std::string selection = currentDirectoryVector[selectedIndex];
-            if (selection == Filemanager::Constants::BACK) {
+            if (selection == Filemanager::Constants::PARENT_DIRECTORY) {
                 currentPath = currentPath.parent_path();
                 refeshDirectoryVector(currentPath, currentDirectoryVector);
                 isFileFocused = false;
-            } else if (selection == Filemanager::Constants::QUIT) {
+            } else if (selection == Filemanager::Constants::QUIT_PROGRAM) {
                 screen.ExitLoopClosure()();
             } else if (fs::is_directory(currentPath / selection)) {
                 currentPath /= selection;
@@ -390,8 +469,7 @@ int main() {
                 fileAbsolutePath = fs::absolute(currentPath / selection).string();
                 isFileFocused = true;
                 FileMetadata meta = getFileData(fileAbsolutePath);
-                fileMetadataString =
-                    fileAbsolutePath + " | Size: " + std::to_string(meta.file_size);
+                fileMetadataString = fileAbsolutePath + " | Size: " + std::to_string(meta.file_size);
                 fileActions->TakeFocus();
             }
             return true;
