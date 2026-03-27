@@ -10,5 +10,9 @@ const std::string CPU_INFO_PATH = "/proc/cpuinfo";
 const std::string VIRTUAL_FILE_SYSTEM_PATH = "/proc/";
 const std::string ROOT_STORAGE_PATH = "/";
 const std::string USER_LIST_PATH = "/etc/passwd";
+const std::string WORKSPACE_APP_FIREFOX_LABEL = "Firefox";
+const std::string WORKSPACE_APP_VSCODE_LABEL = "VS Code";
+const std::string WORKSPACE_APP_FIREFOX_COMMAND = "firefox";
+const std::string WORKSPACE_APP_VSCODE_COMMAND = "code";
 inline constexpr uint32_t GIBIBYTES_CONVERSION = 1073741824;
 } // namespace Filemanager::Constants

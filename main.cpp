@@ -163,6 +163,42 @@ int main() {
             runSearchWithinSelectedFile();
         }
     });
+    auto launchWorkspaceApp = [&](const std::string &appLabel, const std::string &appCommand) {
+        const std::string detachedCommand = appCommand + " >/dev/null 2>&1 &";
+        const int status = std::system(detachedCommand.c_str());
+        if (status == 0) {
+            fileMetadataString = "Launched " + appLabel + " using `" + appCommand + "`";
+            return;
+        }
+        fileMetadataString = "Failed to launch " + appLabel + " using `" + appCommand + "`";
+    };
+    auto createWorkspaceAppCard = [&](const std::string &appLabel, const std::string &appCommand) -> Component {
+        auto launchButton = UIComponents::createButton("Launch", [&, appLabel, appCommand] { launchWorkspaceApp(appLabel, appCommand); },
+                                                       ButtonOption::Simple());
+        auto appCardContainer = Container::Vertical({launchButton});
+        return Renderer(appCardContainer, [launchButton, appLabel, appCommand] {
+            return vbox({
+                       text(appLabel) | bold | center | color(Color::CyanLight),
+                       text(appCommand) | dim | center,
+                       text("Press Enter to launch") | dim | center,
+                       separator(),
+                       launchButton->Render() | center,
+                   }) |
+                   border | size(WIDTH, EQUAL, 30);
+        });
+    };
+    auto createWorkspaceAppRow = [&]() -> Component {
+        auto firefoxCard = createWorkspaceAppCard(Filemanager::Constants::WORKSPACE_APP_FIREFOX_LABEL,
+                                                  Filemanager::Constants::WORKSPACE_APP_FIREFOX_COMMAND);
+        auto vscodeCard = createWorkspaceAppCard(Filemanager::Constants::WORKSPACE_APP_VSCODE_LABEL,
+                                                 Filemanager::Constants::WORKSPACE_APP_VSCODE_COMMAND);
+        auto appsRowContainer = Container::Horizontal({firefoxCard, vscodeCard});
+        return Renderer(appsRowContainer, [firefoxCard, vscodeCard] {
+            return hbox({firefoxCard->Render() | flex, text("  "), vscodeCard->Render() | flex}) | center;
+        });
+    };
+    auto splashWorkspaceAppRow = createWorkspaceAppRow();
+    auto mainWorkspaceAppRow = createWorkspaceAppRow();
 
     auto create_modal_container = Container::Vertical({fileNameInput, fileNameSubmit});
     auto rename_modal_container = Container::Vertical({renameInputComp, renameSubmit});
@@ -246,6 +282,16 @@ int main() {
                    text("Accounts loaded from /etc/passwd") | dim | center,
                    separator(),
                    userCardsContainer->Render() | vscroll_indicator | frame | flex,
+               }) |
+               border;
+    });
+    auto workspaceAppsRenderer = Renderer(mainWorkspaceAppRow, [&] {
+        return vbox({
+                   text("WORKSPACE APPS") | bold | center,
+                   separator(),
+                   text("Quick launch cards for your workspace tools.") | dim | center,
+                   separator(),
+                   mainWorkspaceAppRow->Render(),
                }) |
                border;
     });
@@ -345,9 +391,11 @@ int main() {
     });
 
     int main_tab_selected = 0;
-    std::vector<std::string> tab_titles = {"Browse Files", "Search Files", "System Information", "User List"};
+    std::vector<std::string> tab_titles = {"Browse Files", "Search Files", "System Information", "User List",
+                                           "Workspace Apps"};
     auto main_tabs =
-        Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer, userListRenderer}, &main_tab_selected);
+        Container::Tab({browseRenderer, searchRenderer, systemInformationRenderer, userListRenderer, workspaceAppsRenderer},
+                       &main_tab_selected);
 
     auto app_renderer = Renderer(main_tabs, [&] {
         Elements tab_elements;
@@ -513,7 +561,8 @@ int main() {
         route_selected = 1;
         menu->TakeFocus();
     });
-    auto splash_renderer = Renderer(splash_continue_button, [&] {
+    auto splash_container = Container::Vertical({splash_continue_button, splashWorkspaceAppRow});
+    auto splash_renderer = Renderer(splash_container, [&] {
         return vbox({
                    filler(),
                    vbox({
@@ -521,6 +570,11 @@ int main() {
                        text("Press the button below to start") | dim | center,
                        separator(),
                        splash_continue_button->Render() | center,
+                       separator(),
+                       text("Quick Launch") | bold | center,
+                       splashWorkspaceAppRow->Render(),
+                       separator(),
+                       text(fileMetadataString) | dim | center,
                    }) | border |
                        size(WIDTH, GREATER_THAN, 44),
                    filler(),
