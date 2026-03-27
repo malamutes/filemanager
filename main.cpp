@@ -1,7 +1,10 @@
+#include "constants/constants.hpp"
 #include "ftxui/component/captured_mouse.hpp"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/component_options.hpp"
 #include "ftxui/component/screen_interactive.hpp"
+#include "include/data_fetching/data_fetching.hpp"
+#include "include/utils/utils.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -18,227 +21,9 @@
 #include <thread>
 #include <vector>
 
-const std::string QUIT = "QUIT";
-const std::string BACK = "BACK";
-const std::string BATTERY_INFO_PATH = "/sys/class/power_supply/BAT0/";
-const std::string CPU_INFO_PATH = "/proc/cpuinfo";
-const std::string VIRTUAL_FILE_SYSTEM_PATH = "/proc/";
-const std::string ROOT_STORAGE_PATH = "/";
-const uint32_t GIBIBYTES_CONVERSION = 1073741824;
 using namespace ftxui;
 namespace fs = std::filesystem;
 std::mutex refreshSystemData_mutex;
-
-struct BatteryInfo {
-    std::string battery;
-    std::string status;
-    std::string model_name;
-};
-
-struct CPUInfo {
-    std::string model_name;
-    std::string cores;
-    std::string threads;
-    std::string current_mhz;
-};
-
-struct FileMetadata {
-    std::uintmax_t file_size;
-    fs::file_status file_status;
-    fs::file_time_type file_time_type;
-    bool existsOrFile;
-};
-
-struct ProcessIDMetadata {
-    std::string pid;
-    std::string vmrss;
-    std::string process_name;
-    std::string state;
-};
-
-FileMetadata getFileData(fs::path file_path) {
-    if (fs::is_directory(file_path) || !fs::exists(file_path)) {
-        return {0, fs::file_status(), fs::file_time_type(), false};
-    } else {
-        return {fs::file_size(file_path), fs::status(file_path), fs::last_write_time(file_path),
-                true};
-    }
-}
-
-std::string file_type_to_string(fs::file_type ft) {
-    switch (ft) {
-    case fs::file_type::none:
-        return "none";
-    case fs::file_type::not_found:
-        return "not_found";
-    case fs::file_type::regular:
-        return "regular";
-    case fs::file_type::directory:
-        return "directory";
-    case fs::file_type::symlink:
-        return "symlink";
-    case fs::file_type::block:
-        return "block";
-    case fs::file_type::character:
-        return "character";
-    case fs::file_type::fifo:
-        return "fifo";
-    case fs::file_type::socket:
-        return "socket";
-    case fs::file_type::unknown:
-        return "unknown";
-    default:
-        return "invalid";
-    }
-}
-
-void refeshDirectoryVector(fs::path newCurrentPath, std::vector<std::string> &oldDirectoryVector) {
-    oldDirectoryVector.clear();
-    oldDirectoryVector.push_back(QUIT);
-    oldDirectoryVector.push_back(BACK);
-    try {
-        for (auto const &dir_entry : std::filesystem::directory_iterator{newCurrentPath}) {
-            oldDirectoryVector.push_back(dir_entry.path().filename().string());
-        }
-    } catch (...) {
-    }
-}
-
-void refeshBatteryInfo(BatteryInfo &BatteryInfo) {
-    std::ifstream capFile(BATTERY_INFO_PATH + "capacity");
-    if (capFile)
-        capFile >> BatteryInfo.battery;
-    std::ifstream statFile(BATTERY_INFO_PATH + "status");
-    if (statFile)
-        statFile >> BatteryInfo.status;
-    std::ifstream modelFile(BATTERY_INFO_PATH + "model_name");
-    if (modelFile)
-        std::getline(modelFile, BatteryInfo.model_name);
-}
-
-void refreshCPUInfo(CPUInfo &cpu) {
-    std::ifstream file(CPU_INFO_PATH);
-    std::string line;
-    int thread_count = 0;
-    while (std::getline(file, line)) {
-        if (line.find("processor") == 0)
-            thread_count++;
-        if (cpu.model_name.empty() && line.find("model name") != std::string::npos) {
-            size_t colon = line.find(':');
-            if (colon != std::string::npos)
-                cpu.model_name = line.substr(colon + 2);
-        }
-        if (line.find("cpu cores") != std::string::npos) {
-            size_t colon = line.find(':');
-            if (colon != std::string::npos)
-                cpu.cores = line.substr(colon + 2);
-        }
-        if (line.find("cpu MHz") != std::string::npos) {
-            size_t colon = line.find(':');
-            if (colon != std::string::npos)
-                cpu.current_mhz = line.substr(colon + 2);
-        }
-    }
-    cpu.threads = std::to_string(thread_count);
-}
-
-std::uintmax_t disk_usage_percent(const fs::space_info &si, bool is_privileged = false) noexcept {
-    if (constexpr std::uintmax_t X(-1); si.capacity == 0 || si.free == 0 || si.available == 0 ||
-                                        si.capacity == X || si.free == X || si.available == X)
-        return 100;
-    std::uintmax_t unused_space = si.free, capacity = si.capacity;
-    if (!is_privileged) {
-        const std::uintmax_t privileged_only_space = si.free - si.available;
-        unused_space -= privileged_only_space;
-        capacity -= privileged_only_space;
-    }
-    return 100 * (capacity - unused_space) / capacity;
-}
-
-void getStorageInformation(fs::space_info &StorageInfo) {
-    try {
-        StorageInfo = fs::space(ROOT_STORAGE_PATH);
-    } catch (...) {
-    }
-}
-
-std::string determineFileIcon(const fs::path &FilePath) {
-    try {
-        fs::file_status s = fs::status(FilePath);
-        auto perms = s.permissions();
-        if ((perms & fs::perms::owner_read) == fs::perms::none)
-            return "\uf023 ";
-        if (fs::is_directory(s))
-            return fs::is_empty(FilePath) ? "\uf115 " : "\uf07c ";
-        std::string ext = FilePath.extension().string();
-        for (auto &c : ext)
-            c = std::tolower(c);
-        if (ext == ".cpp" || ext == ".hpp")
-            return "\ue61d ";
-        if (ext == ".py")
-            return "\ue235 ";
-        return "\uf15b ";
-    } catch (...) {
-        return "\uf023 ";
-    }
-}
-
-ProcessIDMetadata getProcessInfo(const std::string &pid) {
-    std::ifstream statusFile("/proc/" + pid + "/status");
-    std::string line;
-    std::string name, vmrss, state;
-    while (std::getline(statusFile, line)) {
-        if (line.find("Name:") == 0)
-            name = line.substr(5);
-        if (line.find("VmRSS:") == 0)
-            vmrss = line.substr(6);
-        if (line.find("State:") == 0)
-            state = line.substr(6);
-    }
-    if (!name.empty()) {
-        name.erase(0, name.find_first_not_of(" \t"));
-        vmrss.erase(0, vmrss.find_first_not_of(" \t"));
-        return {pid, vmrss, name, state};
-    }
-    return {"", "", "", ""};
-}
-
-bool is_number(const std::string &s) {
-    return !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
-}
-
-void refreshProcessData(std::vector<ProcessIDMetadata> &userProcessIDMetadata,
-                        ScreenInteractive *screen) {
-    auto lastUpdate = std::chrono::system_clock::now();
-    while (true) {
-        auto now = std::chrono::system_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastUpdate);
-        if (elapsed.count() >= 500) {
-            std::vector<ProcessIDMetadata> temp;
-            try {
-                for (auto const &dir_entry :
-                     std::filesystem::directory_iterator{VIRTUAL_FILE_SYSTEM_PATH}) {
-                    if (dir_entry.is_directory()) {
-                        std::string pid = dir_entry.path().filename().string();
-                        if (is_number(pid)) {
-                            auto info = getProcessInfo(pid);
-                            if (!info.pid.empty())
-                                temp.push_back(info);
-                        }
-                    }
-                }
-            } catch (...) {
-            }
-            {
-                std::lock_guard<std::mutex> guard(refreshSystemData_mutex);
-                userProcessIDMetadata = std::move(temp);
-            }
-            screen->Post(Event::Custom);
-            lastUpdate = now;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-}
 
 int main() {
     auto screen = ScreenInteractive::TerminalOutput();
@@ -246,7 +31,8 @@ int main() {
     std::vector<std::string> process_table_list;
     int process_selected = 0;
 
-    std::thread refreshThread(refreshProcessData, std::ref(userProcessIDMetadata), &screen);
+    std::thread refreshThread(refreshProcessData, std::ref(userProcessIDMetadata), &screen,
+                              std::ref(refreshSystemData_mutex));
     refreshThread.detach();
 
     fs::path currentPath = fs::current_path();
@@ -272,7 +58,7 @@ int main() {
     option.entries_option.transform = [&](const EntryState &state) {
         std::string label = state.label;
         Element e = text(label);
-        if (label != QUIT && label != BACK) {
+        if (label != Filemanager::Constants::QUIT && label != Filemanager::Constants::BACK) {
             std::string icon = determineFileIcon(currentPath / label);
             e = hbox({text(icon) | color(Color::Yellow), text(label)});
         }
@@ -448,7 +234,7 @@ int main() {
                                vbox({text(" " +
                                           std::to_string(
                                               (currentStorage.capacity - currentStorage.available) /
-                                              GIBIBYTES_CONVERSION) +
+                                              Filemanager::Constants::GIBIBYTES_CONVERSION) +
                                           " GB"),
                                      text(" " + std::to_string((int)(storage_ratio * 100)) +
                                           "% Used") |
@@ -567,11 +353,11 @@ int main() {
         }
         if (event == Event::Return && menu->Focused()) {
             std::string selection = currentDirectoryVector[selectedIndex];
-            if (selection == BACK) {
+            if (selection == Filemanager::Constants::BACK) {
                 currentPath = currentPath.parent_path();
                 refeshDirectoryVector(currentPath, currentDirectoryVector);
                 isFileFocused = false;
-            } else if (selection == QUIT) {
+            } else if (selection == Filemanager::Constants::QUIT) {
                 screen.ExitLoopClosure()();
             } else if (fs::is_directory(currentPath / selection)) {
                 currentPath /= selection;
