@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -49,4 +50,26 @@ ProcessIDMetadata getProcessInfo(const std::string &pid) {
 
 bool is_number(const std::string &s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
+}
+
+void searchQueryInFile(const std::string &queryToSearch, std::vector<std::string> &queryResults,
+                       const fs::path &searchFile) {
+    if (fs::is_directory(searchFile) || !fs::exists(searchFile)) {
+        // dont do anything if directory for now
+        return;
+    }
+
+    std::string currLine;
+    int currLineNum = 0;
+    std::ifstream readFile(fs::absolute(searchFile).string());
+
+    if (readFile.is_open()) {
+        while (std::getline(readFile, currLine)) {
+            if (currLine.find(queryToSearch) != std::string::npos) {
+                queryResults.push_back(currLine);
+            }
+            currLineNum++;
+        }
+        readFile.close();
+    }
 }

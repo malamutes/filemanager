@@ -4,6 +4,7 @@
 #include "ftxui/component/component_options.hpp"
 #include "ftxui/component/screen_interactive.hpp"
 #include "include/data_fetching/data_fetching.hpp"
+#include "include/ui_component/ui_component.hpp"
 #include "include/utils/utils.hpp"
 #include <algorithm>
 #include <chrono>
@@ -42,6 +43,7 @@ int main() {
     std::string fileAbsolutePath = "";
     std::string searchQuery = "";
     bool isFileFocused = false;
+    bool isSearchFileFocused = false;
     bool showCreateModal = false;
     bool showRenameModal = false;
     std::string newFileName = "";
@@ -49,6 +51,8 @@ int main() {
     BatteryInfo currentBattery;
     CPUInfo currentCPU;
     fs::space_info currentStorage;
+    std::string searchInFile = "";
+    std::string searchInFileResults = "";
 
     refeshDirectoryVector(currentPath, currentDirectoryVector);
     int selectedIndex = 0;
@@ -69,73 +73,70 @@ int main() {
         return e;
     };
 
-    auto menu = Menu(&currentDirectoryVector, &selectedIndex, option);
-    auto fileSearchResultsMenu = Menu(&fileSearchResultsVector, &selectedFileResultsIndex);
+    auto menu = UIComponents::createMenu(&currentDirectoryVector, &selectedIndex, option);
+    auto fileSearchResultsMenu =
+        UIComponents::createMenu(&fileSearchResultsVector, &selectedFileResultsIndex);
     auto fileSearchInput = Input(&searchQuery, "Type filename...");
-    auto process_table_menu = Menu(&process_table_list, &process_selected);
+    auto process_table_menu = UIComponents::createTable(&process_table_list, &process_selected);
 
-    auto btn_open_vs_file = Button(
-        "Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); },
-        ButtonOption::Animated());
-    auto btn_open_vs_dir = Button(
-        "Open Dir in VS Code", [&] { system(("code \"" + currentPath.string() + "\"").c_str()); },
-        ButtonOption::Animated());
-    auto btn_delete_file = Button(
-        "Delete File",
-        [&] {
-            if (fs::exists(fileAbsolutePath)) {
-                fs::remove(fileAbsolutePath);
-                refeshDirectoryVector(currentPath, currentDirectoryVector);
-                isFileFocused = false;
-                menu->TakeFocus();
-            }
-        },
-        ButtonOption::Animated());
+    auto btn_open_vs_file = UIComponents::createButton(
+        "Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
+    auto btn_search_open_vs_file = UIComponents::createButton(
+        "Open File in VS Code", [&] { system(("code \"" + fileAbsolutePath + "\"").c_str()); });
+    auto btn_search_query_in_file = UIComponents::createButton("Search Within File", [&] {
+        system(("cat \"" + fs::path(fileAbsolutePath).filename().string() + "\"" + " | grep " +
+                "\"" + searchInFile + "\"")
+                   .c_str());
+    });
+    auto btn_open_vs_dir = UIComponents::createButton(
+        "Open Dir in VS Code", [&] { system(("code \"" + currentPath.string() + "\"").c_str()); });
+    auto btn_delete_file = UIComponents::createButton("Delete File", [&] {
+        if (fs::exists(fileAbsolutePath)) {
+            fs::remove(fileAbsolutePath);
+            refeshDirectoryVector(currentPath, currentDirectoryVector);
+            isFileFocused = false;
+            menu->TakeFocus();
+        }
+    });
     auto btn_create_file =
-        Button("Create New File", [&] { showCreateModal = true; }, ButtonOption::Animated());
-    auto btn_rename_file = Button(
-        "Rename File",
-        [&] {
-            renameInputStr = fs::path(fileAbsolutePath).filename().string();
-            showRenameModal = true;
-        },
-        ButtonOption::Animated());
+        UIComponents::createButton("Create New File", [&] { showCreateModal = true; });
+    auto btn_rename_file = UIComponents::createButton("Rename File", [&] {
+        renameInputStr = fs::path(fileAbsolutePath).filename().string();
+        showRenameModal = true;
+    });
 
     auto fileActions = Container::Vertical({btn_open_vs_file, btn_rename_file, btn_delete_file});
     auto dirActions = Container::Vertical({btn_open_vs_dir, btn_create_file});
     auto fileNameInput = Input(&newFileName, "filename.txt");
-    auto fileNameSubmit = Button(
-        "Create",
-        [&] {
-            if (!newFileName.empty()) {
-                std::ofstream(currentPath / newFileName).close();
-                refeshDirectoryVector(currentPath, currentDirectoryVector);
-                showCreateModal = false;
-                newFileName = "";
-                menu->TakeFocus();
-            }
-        },
-        ButtonOption::Animated());
+    auto fileNameSubmit = UIComponents::createButton("Create", [&] {
+        if (!newFileName.empty()) {
+            std::ofstream(currentPath / newFileName).close();
+            refeshDirectoryVector(currentPath, currentDirectoryVector);
+            showCreateModal = false;
+            newFileName = "";
+            menu->TakeFocus();
+        }
+    });
     auto renameInputComp = Input(&renameInputStr, "");
-    auto renameSubmit = Button(
-        "Rename",
-        [&] {
-            if (!renameInputStr.empty()) {
-                fs::path oldPath = fileAbsolutePath;
-                fs::path newPath = oldPath.parent_path() / renameInputStr;
-                fs::rename(oldPath, newPath);
-                refeshDirectoryVector(currentPath, currentDirectoryVector);
-                showRenameModal = false;
-                isFileFocused = false;
-                menu->TakeFocus();
-            }
-        },
-        ButtonOption::Animated());
+    auto renameSubmit = UIComponents::createButton("Rename", [&] {
+        if (!renameInputStr.empty()) {
+            fs::path oldPath = fileAbsolutePath;
+            fs::path newPath = oldPath.parent_path() / renameInputStr;
+            fs::rename(oldPath, newPath);
+            refeshDirectoryVector(currentPath, currentDirectoryVector);
+            showRenameModal = false;
+            isFileFocused = false;
+            menu->TakeFocus();
+        }
+    });
 
     auto create_modal_container = Container::Vertical({fileNameInput, fileNameSubmit});
     auto rename_modal_container = Container::Vertical({renameInputComp, renameSubmit});
     auto browseContent =
         Container::Horizontal({menu, Container::Vertical({fileActions, dirActions})});
+    auto searchFileActions = Container::Vertical({btn_search_open_vs_file});
+    auto searchContent = Container::Horizontal(
+        {Container::Vertical({fileSearchInput, fileSearchResultsMenu}), searchFileActions});
 
     auto browseRenderer = Renderer(browseContent, [&] {
         auto title = isFileFocused ? " [FILE ACTIONS] " : " [DIR ACTIONS] ";
@@ -146,12 +147,20 @@ int main() {
                          size(WIDTH, EQUAL, 25)});
     });
 
-    auto searchRenderer =
-        Renderer(Container::Vertical({fileSearchInput, fileSearchResultsMenu}), [&] {
-            return vbox({text("Search in: " + currentPath.string()) | dim,
-                         fileSearchInput->Render() | border, separator(),
-                         fileSearchResultsMenu->Render() | vscroll_indicator | frame | flex});
-        });
+    auto searchRenderer = Renderer(searchContent, [&] {
+        auto searchActionsContent =
+            isSearchFileFocused
+                ? searchFileActions->Render()
+                : vbox({text("Select a result") | dim, text("Press Enter/Right") | dim});
+        return hbox({vbox({text("Search in: " + currentPath.string()) | dim,
+                           fileSearchInput->Render() | border, separator(),
+                           fileSearchResultsMenu->Render() | vscroll_indicator | frame | flex}) |
+                         flex,
+                     separator(),
+                     vbox({text(" [SEARCH ACTIONS] ") | bold | center | color(Color::Yellow),
+                           separator(), searchActionsContent}) |
+                         size(WIDTH, EQUAL, 25)});
+    });
 
     auto systemInformationContent = Container::Vertical(
         {Renderer([&] {
@@ -162,7 +171,6 @@ int main() {
                  std::lock_guard<std::mutex> guard(refreshSystemData_mutex);
                  process_table_list.clear();
 
-                 // Calculate column widths
                  size_t pid_width = 5;
                  size_t name_width = 12;
                  size_t mem_width = 8;
@@ -173,7 +181,6 @@ int main() {
                      mem_width = std::max(mem_width, (p.vmrss.empty() ? 6 : p.vmrss.length()));
                  }
 
-                 // Add header
                  std::string header = "PID";
                  header.resize(pid_width, ' ');
                  header += "  Name";
@@ -183,10 +190,8 @@ int main() {
                  header += "  State";
                  process_table_list.push_back(header);
 
-                 // Add separator
                  process_table_list.push_back(std::string(header.length(), '-'));
 
-                 // Add rows
                  for (auto const &p : userProcessIDMetadata) {
                      std::string row = p.pid;
                      row.resize(pid_width, ' ');
@@ -210,57 +215,50 @@ int main() {
                  hbox({
                      vbox({
                          text("  SYSTEM ") | bold | color(Color::Blue),
-                         hbox({text("  CPU Model:  "), text(currentCPU.model_name) | dim}),
-                         hbox({text("  Topology:   "), text(currentCPU.cores + " Cores / " +
-                                                            currentCPU.threads + " Threads")}),
-                         hbox({text("  Clock:      "),
-                               text(currentCPU.current_mhz + " MHz") | color(Color::Yellow)}),
+                         UIComponents::createStatBox("  CPU Model:  ", currentCPU.model_name),
+                         UIComponents::createStatBox("  Topology:   ",
+                                                     currentCPU.cores + " Cores / " +
+                                                         currentCPU.threads + " Threads"),
+                         UIComponents::createStatBox(
+                             "  Clock:      ", currentCPU.current_mhz + " MHz", Color::Yellow),
                      }) | flex,
                      separator(),
                      vbox({
                          text("  SESSION ") | bold | color(Color::Blue),
-                         hbox({text("  Path:       "),
-                               text(currentPath.filename().string()) | color(Color::Yellow)}),
+                         UIComponents::createStatBox(
+                             "  Path:       ", currentPath.filename().string(), Color::Yellow),
                      }) | size(WIDTH, EQUAL, 30),
                  }),
 
                  separatorDouble(),
 
-                 // 2. MIDDLE SECTION: Storage and Power Gauges
                  hbox({
                      vbox({
                          text(" STORAGE USAGE ") | bold | color(Color::Magenta),
-                         hbox({gauge(storage_ratio) | color(Color::Magenta) | border,
-                               vbox({text(" " +
-                                          std::to_string(
-                                              (currentStorage.capacity - currentStorage.available) /
-                                              Filemanager::Constants::GIBIBYTES_CONVERSION) +
-                                          " GB"),
-                                     text(" " + std::to_string((int)(storage_ratio * 100)) +
-                                          "% Used") |
-                                         dim})}),
+                         UIComponents::createGaugeBox(
+                             storage_ratio,
+                             " " +
+                                 std::to_string(
+                                     (currentStorage.capacity - currentStorage.available) /
+                                     Filemanager::Constants::GIBIBYTES_CONVERSION) +
+                                 " GB",
+                             " " + std::to_string((int)(storage_ratio * 100)) + "% Used",
+                             Color::Magenta),
                      }) | flex,
                      separator(),
                      vbox({
                          text(" POWER STATUS ") | bold | color(Color::Cyan),
-                         hbox({gauge(bat_ratio) |
-                                   color(currentBattery.status == "Charging" ? Color::Green
-                                                                             : Color::Cyan) |
-                                   border,
-                               vbox({text(" " + currentBattery.battery + "%"),
-                                     text(" " + currentBattery.status) |
-                                         color(currentBattery.status == "Charging"
-                                                   ? Color::Green
-                                                   : Color::White)})}),
+                         UIComponents::createGaugeBox(
+                             bat_ratio, " " + currentBattery.battery + "%",
+                             " " + currentBattery.status,
+                             currentBattery.status == "Charging" ? Color::Green : Color::Cyan),
                      }) | flex,
                  }),
 
                  separatorDashed(),
              });
          }),
-         Renderer(process_table_menu, [&] {
-             return process_table_menu->Render() | vscroll_indicator | frame | border | flex;
-         })});
+         process_table_menu});
 
     auto systemInformationRenderer = Renderer(systemInformationContent, [&] {
         return vbox({text("SYSTEM INFORMATION") | bold | center, separator(),
@@ -329,8 +327,25 @@ int main() {
             return rename_modal_container->OnEvent(event);
         }
         if (main_tab_selected == 1) {
-            if (event == Event::Return && !fileSearchResultsMenu->Focused()) {
+            auto focusSearchSelection = [&]() {
+                if (fileSearchResultsVector.empty()) {
+                    return true;
+                }
+                fileAbsolutePath =
+                    fs::absolute((fs::path)fileSearchResultsVector[selectedFileResultsIndex])
+                        .string();
+                isSearchFileFocused = true;
+                FileMetadata meta = getFileData(fileAbsolutePath);
+                fileMetadataString =
+                    fileAbsolutePath + " | Size: " + std::to_string(meta.file_size);
+                searchFileActions->TakeFocus();
+                return true;
+            };
+
+            if (event == Event::Return && fileSearchInput->Focused()) {
                 fileSearchResultsVector.clear();
+                selectedFileResultsIndex = 0;
+                isSearchFileFocused = false;
                 try {
                     for (auto const &dir_entry : fs::recursive_directory_iterator(currentPath)) {
                         if (dir_entry.path().filename().string().find(searchQuery) !=
@@ -340,18 +355,26 @@ int main() {
                 } catch (...) {
                 }
                 return true;
-            } else if (event == Event::Return && fileSearchResultsMenu->Focused()) {
-                if (!fileSearchResultsVector.empty()) {
-                    fileAbsolutePath =
-                        fs::absolute((fs::path)fileSearchResultsVector[selectedFileResultsIndex])
-                            .string();
-                    system(("code \"" + fileAbsolutePath + "\"").c_str());
-                }
+            }
+            if (event == Event::Return && fileSearchResultsMenu->Focused()) {
+                return focusSearchSelection();
+            }
+            if (event == Event::ArrowRight && fileSearchResultsMenu->Focused()) {
+                return focusSearchSelection();
+            }
+            if (event == Event::ArrowLeft && searchFileActions->Focused()) {
+                isSearchFileFocused = false;
+                fileSearchResultsMenu->TakeFocus();
+                return true;
+            }
+            if (event == Event::Escape && isSearchFileFocused) {
+                isSearchFileFocused = false;
+                fileSearchResultsMenu->TakeFocus();
                 return true;
             }
             return searchRenderer->OnEvent(event);
         }
-        if (event == Event::Return && menu->Focused()) {
+        if (main_tab_selected == 0 && event == Event::Return && menu->Focused()) {
             std::string selection = currentDirectoryVector[selectedIndex];
             if (selection == Filemanager::Constants::BACK) {
                 currentPath = currentPath.parent_path();
@@ -373,12 +396,12 @@ int main() {
             }
             return true;
         }
-        if (event == Event::Escape) {
+        if (main_tab_selected == 0 && event == Event::Escape) {
             isFileFocused = false;
             menu->TakeFocus();
             return true;
         }
-        if (event == Event::ArrowRight && menu->Focused()) {
+        if (main_tab_selected == 0 && event == Event::ArrowRight && menu->Focused()) {
             if (isFileFocused)
                 fileActions->TakeFocus();
             else
